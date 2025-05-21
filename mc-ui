@@ -166,26 +166,101 @@ restore_backup() {
 
 # Setup web interface
 setup_web_interface() {
+    log "Setting up web interface..."
+    
+    # Ensure web directory exists and has correct permissions
+    mkdir -p "$WEB_DIR"
+    chown -R www-data:www-data "$WEB_DIR"
+    chmod -R 755 "$WEB_DIR"
+
     # Create nginx configuration
     cat > /etc/nginx/sites-available/minecraft << EOF
 server {
     listen ${WEB_PORT};
     server_name localhost;
 
+    access_log /var/log/nginx/minecraft-access.log;
+    error_log /var/log/nginx/minecraft-error.log;
+
     root ${WEB_DIR};
     index index.html;
 
     location / {
         try_files \$uri \$uri/ =404;
+        autoindex off;
     }
+
+    # Add headers to disable caching for development
+    add_header Cache-Control "no-cache, no-store, must-revalidate";
+    add_header Pragma "no-cache";
+    add_header Expires "0";
 }
 EOF
 
-    # Enable site
+    # Enable site and remove default if exists
+    rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/minecraft /etc/nginx/sites-enabled/
+
+    # Test nginx configuration
+    nginx -t
+
+    if [ $? -eq 0 ]; then
+        # Restart nginx
+        systemctl restart nginx
+        log "${GREEN}Web interface setup completed. Access it at http://localhost:${WEB_PORT}${NC}"
+        
+        # Check if nginx is running
+        if ! systemctl is-active --quiet nginx; then
+            log "${RED}Warning: nginx is not running. Starting nginx...${NC}"
+            systemctl start nginx
+        fi
+        
+        # Verify permissions one more time
+        chown -R www-data:www-data "$WEB_DIR"
+        chmod -R 755 "$WEB_DIR"
+        
+        # Add SELinux context if SELinux is enabled
+        if command -v semanage >/dev/null 2>&1; then
+            semanage fcontext -a -t httpd_sys_content_t "${WEB_DIR}(/.*)?"
+            restorecon -Rv "${WEB_DIR}"
+        fi
+    else
+        log "${RED}Error: nginx configuration test failed${NC}"
+        exit 1
+    fi
+}
+
+# Uninstall everything
+uninstall() {
+    log "Starting uninstallation process..."
     
-    # Restart nginx
-    systemctl restart nginx
+    # Stop server if running
+    stop_server
+    
+    # Remove nginx configuration
+    if [ -f /etc/nginx/sites-enabled/minecraft ]; then
+        rm -f /etc/nginx/sites-enabled/minecraft
+        rm -f /etc/nginx/sites-available/minecraft
+        systemctl restart nginx
+    fi
+    
+    # Remove Java if it was installed by us
+    if dpkg -l | grep -q "openjdk-${JAVA_VERSION}-jre-headless"; then
+        apt-get remove -y openjdk-${JAVA_VERSION}-jre-headless
+    fi
+    
+    # Remove screen if it was installed by us
+    if dpkg -l | grep -q "screen"; then
+        apt-get remove -y screen
+    fi
+    
+    # Remove installation directory
+    rm -rf "/opt/minecraft-server"
+    
+    # Remove symlink
+    rm -f /usr/local/bin/mc-ui
+    
+    log "${GREEN}Uninstallation completed. All components have been removed.${NC}"
 }
 
 # Show help
@@ -201,6 +276,7 @@ show_help() {
     echo "  backup       - Create a backup"
     echo "  restore      - Restore from a backup"
     echo "  web          - Setup/update web interface"
+    echo "  uninstall    - Remove all components and configurations"
     echo "  help         - Show this help message"
 }
 
@@ -238,6 +314,17 @@ case "$1" in
     "web")
         check_root
         setup_web_interface
+        ;;
+    "uninstall")
+        check_root
+        echo -e "${YELLOW}Warning: This will remove all server files, configurations, and backups.${NC}"
+        read -p "Are you sure you want to continue? (y/N) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            uninstall
+        else
+            log "Uninstallation cancelled."
+        fi
         ;;
     "help"|"")
         show_help
