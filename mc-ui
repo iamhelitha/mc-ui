@@ -164,9 +164,18 @@ restore_backup() {
     start_server
 }
 
+# Get server IP address
+get_server_ip() {
+    SERVER_IP=$(hostname -I | awk '{print $1}')
+    if [ -z "$SERVER_IP" ]; then
+        SERVER_IP="127.0.0.1"
+    fi
+}
+
 # Setup web interface
 setup_web_interface() {
     log "Setting up web interface..."
+    get_server_ip
     
     # Ensure web directory exists and has correct permissions
     mkdir -p "$WEB_DIR"
@@ -176,8 +185,8 @@ setup_web_interface() {
     # Create nginx configuration
     cat > /etc/nginx/sites-available/minecraft << EOF
 server {
-    listen ${WEB_PORT};
-    server_name localhost;
+    listen 80;
+    server_name $SERVER_IP;
 
     access_log /var/log/nginx/minecraft-access.log;
     error_log /var/log/nginx/minecraft-error.log;
@@ -185,17 +194,35 @@ server {
     root ${WEB_DIR};
     index index.html;
 
+    # API endpoints for server management
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+    }
+
+    location /server-properties {
+        alias ${SERVER_DIR}/server.properties;
+        default_type text/plain;
+        auth_basic "Server Configuration";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+    }
+
     location / {
         try_files \$uri \$uri/ =404;
         autoindex off;
     }
-
-    # Add headers to disable caching for development
-    add_header Cache-Control "no-cache, no-store, must-revalidate";
-    add_header Pragma "no-cache";
-    add_header Expires "0";
 }
 EOF
+
+    # Create basic auth for server properties
+    if [ ! -f /etc/nginx/.htpasswd ]; then
+        apt-get install -y apache2-utils
+        echo -n "Create admin password for web interface: "
+        read -s ADMIN_PASS
+        echo
+        htpasswd -bc /etc/nginx/.htpasswd admin "$ADMIN_PASS"
+    fi
 
     # Enable site and remove default if exists
     rm -f /etc/nginx/sites-enabled/default
@@ -207,7 +234,7 @@ EOF
     if [ $? -eq 0 ]; then
         # Restart nginx
         systemctl restart nginx
-        log "${GREEN}Web interface setup completed. Access it at http://localhost:${WEB_PORT}${NC}"
+        log "${GREEN}Web interface setup completed. Access it at http://${SERVER_IP}${NC}"
         
         # Check if nginx is running
         if ! systemctl is-active --quiet nginx; then
@@ -215,15 +242,9 @@ EOF
             systemctl start nginx
         fi
         
-        # Verify permissions one more time
+        # Verify permissions
         chown -R www-data:www-data "$WEB_DIR"
         chmod -R 755 "$WEB_DIR"
-        
-        # Add SELinux context if SELinux is enabled
-        if command -v semanage >/dev/null 2>&1; then
-            semanage fcontext -a -t httpd_sys_content_t "${WEB_DIR}(/.*)?"
-            restorecon -Rv "${WEB_DIR}"
-        fi
     else
         log "${RED}Error: nginx configuration test failed${NC}"
         exit 1
@@ -280,58 +301,113 @@ show_help() {
     echo "  help         - Show this help message"
 }
 
+# Interactive menu
+show_menu() {
+    clear
+    echo -e "${GREEN}Minecraft Server Management Script v${VERSION}${NC}"
+    echo -e "\nSelect an option:"
+    echo "1) Show server status"
+    echo "2) Install server"
+    echo "3) Start server"
+    echo "4) Stop server"
+    echo "5) Restart server"
+    echo "6) Create backup"
+    echo "7) Restore backup"
+    echo "8) Setup web interface"
+    echo "9) Uninstall"
+    echo "0) Exit"
+    
+    echo -n "Enter your choice: "
+    read choice
+
+    case $choice in
+        1) check_system ;;
+        2) check_root && install_requirements && install_server && setup_web_interface ;;
+        3) start_server ;;
+        4) stop_server ;;
+        5) stop_server && start_server ;;
+        6) create_backup ;;
+        7) 
+            echo -n "Enter backup file name: "
+            read backup_file
+            restore_backup "$backup_file"
+            ;;
+        8) check_root && setup_web_interface ;;
+        9) 
+            echo -e "${YELLOW}Warning: This will remove all server files, configurations, and backups.${NC}"
+            read -p "Are you sure you want to continue? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                uninstall
+            else
+                log "Uninstallation cancelled."
+            fi
+            ;;
+        0) exit 0 ;;
+        *) log "${RED}Invalid option${NC}" ;;
+    esac
+
+    echo -e "\nPress Enter to continue..."
+    read
+    show_menu
+}
+
 # Main script logic
-case "$1" in
-    "status")
-        check_system
-        ;;
-    "install")
-        check_root
-        install_requirements
-        install_server
-        setup_web_interface
-        ;;
-    "start")
-        start_server
-        ;;
-    "stop")
-        stop_server
-        ;;
-    "restart")
-        stop_server
-        start_server
-        ;;
-    "backup")
-        create_backup
-        ;;
-    "restore")
-        if [ -z "$2" ]; then
-            log "${RED}Please specify backup file${NC}"
+if [ $# -eq 0 ]; then
+    show_menu
+else
+    case "$1" in
+        "status")
+            check_system
+            ;;
+        "install")
+            check_root
+            install_requirements
+            install_server
+            setup_web_interface
+            ;;
+        "start")
+            start_server
+            ;;
+        "stop")
+            stop_server
+            ;;
+        "restart")
+            stop_server
+            start_server
+            ;;
+        "backup")
+            create_backup
+            ;;
+        "restore")
+            if [ -z "$2" ]; then
+                log "${RED}Please specify backup file${NC}"
+                exit 1
+            fi
+            restore_backup "$2"
+            ;;
+        "web")
+            check_root
+            setup_web_interface
+            ;;
+        "uninstall")
+            check_root
+            echo -e "${YELLOW}Warning: This will remove all server files, configurations, and backups.${NC}"
+            read -p "Are you sure you want to continue? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                uninstall
+            else
+                log "Uninstallation cancelled."
+            fi
+            ;;
+        "help"|"")
+            show_help
+            ;;
+        *)
+            log "${RED}Unknown command: $1${NC}"
+            show_help
             exit 1
-        fi
-        restore_backup "$2"
-        ;;
-    "web")
-        check_root
-        setup_web_interface
-        ;;
-    "uninstall")
-        check_root
-        echo -e "${YELLOW}Warning: This will remove all server files, configurations, and backups.${NC}"
-        read -p "Are you sure you want to continue? (y/N) " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            uninstall
-        else
-            log "Uninstallation cancelled."
-        fi
-        ;;
-    "help"|"")
-        show_help
-        ;;
-    *)
-        log "${RED}Unknown command: $1${NC}"
-        show_help
-        exit 1
-        ;;
-esac 
+            ;;
+    esac
+fi 
