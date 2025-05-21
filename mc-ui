@@ -177,10 +177,24 @@ setup_web_interface() {
     log "Setting up web interface..."
     get_server_ip
     
-    # Ensure web directory exists and has correct permissions
+    # Create and set proper permissions for web directory
     mkdir -p "$WEB_DIR"
+    mkdir -p "$SERVER_DIR"
+    
+    # Copy web files if they don't exist
+    if [ ! -f "$WEB_DIR/index.html" ]; then
+        cp -r "$SCRIPT_DIR/web/"* "$WEB_DIR/"
+    fi
+    
+    # Set proper ownership and permissions
     chown -R www-data:www-data "$WEB_DIR"
+    chown -R www-data:www-data "$SERVER_DIR"
     chmod -R 755 "$WEB_DIR"
+    chmod -R 755 "$SERVER_DIR"
+    
+    # Ensure parent directories have correct permissions
+    chmod 755 "$(dirname "$WEB_DIR")"
+    chmod 755 "$(dirname "$SERVER_DIR")"
 
     # Create nginx configuration
     cat > /etc/nginx/sites-available/minecraft << EOF
@@ -189,28 +203,48 @@ server {
     server_name $SERVER_IP;
 
     access_log /var/log/nginx/minecraft-access.log;
-    error_log /var/log/nginx/minecraft-error.log;
+    error_log /var/log/nginx/minecraft-error.log debug;  # Added debug level
 
+    # Root directory for static files
     root ${WEB_DIR};
     index index.html;
 
-    # API endpoints for server management
-    location /api/ {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
+    # Allow directory listing for backups
+    location /backups {
+        alias ${BACKUP_DIR};
+        autoindex on;
+        autoindex_exact_size off;
+        autoindex_localtime on;
+        allow all;
     }
 
+    # Server properties endpoint
     location /server-properties {
         alias ${SERVER_DIR}/server.properties;
         default_type text/plain;
         auth_basic "Server Configuration";
         auth_basic_user_file /etc/nginx/.htpasswd;
+        allow all;
     }
 
+    # Main location block
     location / {
-        try_files \$uri \$uri/ =404;
-        autoindex off;
+        try_files \$uri \$uri/ /index.html;
+        add_header 'Access-Control-Allow-Origin' '*';
+        add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS';
+        add_header 'Access-Control-Allow-Headers' 'DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range';
+    }
+
+    # API endpoints
+    location /api/ {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host \$host;
+        proxy_cache_bypass \$http_upgrade;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
     }
 }
 EOF
@@ -224,11 +258,11 @@ EOF
         htpasswd -bc /etc/nginx/.htpasswd admin "$ADMIN_PASS"
     fi
 
-    # Enable site and remove default if exists
+    # Remove default site and enable minecraft site
     rm -f /etc/nginx/sites-enabled/default
     ln -sf /etc/nginx/sites-available/minecraft /etc/nginx/sites-enabled/
 
-    # Test nginx configuration
+    # Verify nginx configuration
     nginx -t
 
     if [ $? -eq 0 ]; then
@@ -236,15 +270,26 @@ EOF
         systemctl restart nginx
         log "${GREEN}Web interface setup completed. Access it at http://${SERVER_IP}${NC}"
         
-        # Check if nginx is running
-        if ! systemctl is-active --quiet nginx; then
-            log "${RED}Warning: nginx is not running. Starting nginx...${NC}"
-            systemctl start nginx
-        fi
+        # Check nginx status and logs
+        systemctl status nginx
+        tail -n 20 /var/log/nginx/error.log
         
-        # Verify permissions
-        chown -R www-data:www-data "$WEB_DIR"
-        chmod -R 755 "$WEB_DIR"
+        # Double check permissions
+        find "$WEB_DIR" -type d -exec chmod 755 {} \;
+        find "$WEB_DIR" -type f -exec chmod 644 {} \;
+        find "$SERVER_DIR" -type d -exec chmod 755 {} \;
+        find "$SERVER_DIR" -type f -exec chmod 644 {} \;
+        
+        # Ensure nginx user can access the directories
+        usermod -a -G www-data $USER
+        
+        # SELinux context if SELinux is enabled
+        if command -v semanage >/dev/null 2>&1; then
+            semanage fcontext -a -t httpd_sys_content_t "${WEB_DIR}(/.*)?"
+            semanage fcontext -a -t httpd_sys_content_t "${SERVER_DIR}(/.*)?"
+            restorecon -Rv "${WEB_DIR}"
+            restorecon -Rv "${SERVER_DIR}"
+        fi
     else
         log "${RED}Error: nginx configuration test failed${NC}"
         exit 1
