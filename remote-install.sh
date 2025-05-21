@@ -54,8 +54,8 @@ clone_repository() {
     TMP_DIR=$(mktemp -d)
     cd "$TMP_DIR"
     
-    # Clone repository
-    git clone https://github.com/your-username/mc-ui.git
+    # Clone repository using HTTPS
+    git clone https://github.com/iamhelitha/mc-ui.git
     
     if [ $? -ne 0 ]; then
         print_message "Failed to download mc-ui" "$RED"
@@ -95,7 +95,7 @@ main() {
     print_message "Installation completed successfully!" "$GREEN"
     print_message "\nYou can now use 'mc-ui' command to manage your Minecraft server." "$GREEN"
     print_message "Access the web interface at http://localhost:8080" "$GREEN"
-    print_message "\nFor more information, visit: https://github.com/your-username/mc-ui" "$GREEN"
+    print_message "\nFor more information, visit: https://github.com/iamhelitha/mc-ui" "$GREEN"
 }
 
 # Start installation
