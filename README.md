@@ -18,14 +18,14 @@ A comprehensive Minecraft server management solution with both CLI and web inter
 Install with one command:
 
 ```bash
-bash <(curl -Ls https://raw.githubusercontent.com/your-username/mc-ui/main/remote-install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/iamhelitha/mc-ui/main/remote-install.sh)
 ```
 
 ## Manual Installation
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/your-username/mc-ui.git
+git clone https://github.com/iamhelitha/mc-ui.git
 cd mc-ui
 ```
 
