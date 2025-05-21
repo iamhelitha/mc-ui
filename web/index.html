@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft Server Manager</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .status-panel {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .status-card {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            border: 1px solid #dee2e6;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 30px;
+        }
+        .button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: background-color 0.3s;
+        }
+        .button-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .button-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .button-warning {
+            background-color: #ffc107;
+            color: black;
+        }
+        .button:hover {
+            opacity: 0.9;
+        }
+        .backup-list {
+            margin-top: 20px;
+        }
+        .backup-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            background-color: #f8f9fa;
+            margin-bottom: 10px;
+            border-radius: 5px;
+        }
+        .logs {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Minecraft Server Manager</h1>
+        </div>
+
+        <div class="status-panel">
+            <div class="status-card">
+                <h3>Server Status</h3>
+                <p>Status: <span id="server-status">Checking...</span></p>
+                <p>Players: <span id="player-count">0/20</span></p>
+                <p>Uptime: <span id="uptime">0h 0m</span></p>
+            </div>
+            <div class="status-card">
+                <h3>System Resources</h3>
+                <p>CPU Usage: <span id="cpu-usage">0%</span></p>
+                <p>RAM Usage: <span id="ram-usage">0/0 GB</span></p>
+                <p>Storage: <span id="storage-usage">0/0 GB</span></p>
+            </div>
+        </div>
+
+        <div class="controls">
+            <button class="button button-primary" onclick="controlServer('start')">Start Server</button>
+            <button class="button button-danger" onclick="controlServer('stop')">Stop Server</button>
+            <button class="button button-warning" onclick="controlServer('restart')">Restart Server</button>
+            <button class="button button-primary" onclick="createBackup()">Create Backup</button>
+        </div>
+
+        <h3>Backups</h3>
+        <div class="backup-list" id="backup-list">
+            <!-- Backup items will be inserted here -->
+        </div>
+
+        <h3>Server Logs</h3>
+        <div class="logs" id="server-logs">
+            <!-- Log entries will be inserted here -->
+        </div>
+    </div>
+
+    <script>
+        // Function to update server status
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('server-status').textContent = data.status;
+                    document.getElementById('player-count').textContent = `${data.players.online}/${data.players.max}`;
+                    document.getElementById('uptime').textContent = data.uptime;
+                    document.getElementById('cpu-usage').textContent = data.system.cpu;
+                    document.getElementById('ram-usage').textContent = data.system.ram;
+                    document.getElementById('storage-usage').textContent = data.system.storage;
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Function to control server
+        function controlServer(action) {
+            fetch(`/api/control/${action}`, { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    updateStatus();
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Function to create backup
+        function createBackup() {
+            fetch('/api/backup', { method: 'POST' })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    loadBackups();
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Function to load backups
+        function loadBackups() {
+            fetch('/api/backups')
+                .then(response => response.json())
+                .then(data => {
+                    const backupList = document.getElementById('backup-list');
+                    backupList.innerHTML = '';
+                    data.backups.forEach(backup => {
+                        const item = document.createElement('div');
+                        item.className = 'backup-item';
+                        item.innerHTML = `
+                            <span>${backup.name}</span>
+                            <div>
+                                <button class="button button-primary" onclick="restoreBackup('${backup.name}')">Restore</button>
+                                <button class="button button-danger" onclick="deleteBackup('${backup.name}')">Delete</button>
+                            </div>
+                        `;
+                        backupList.appendChild(item);
+                    });
+                })
+                .catch(error => console.error('Error:', error));
+        }
+
+        // Function to restore backup
+        function restoreBackup(name) {
+            if (confirm('Are you sure you want to restore this backup? Current world will be replaced.')) {
+                fetch(`/api/backup/restore/${name}`, { method: 'POST' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        updateStatus();
+                    })
+                    .catch(error => console.error('Error:', error));
+            }
+        }
+
+        // Function to delete backup
+        function deleteBackup(name) {
+            if (confirm('Are you sure you want to delete this backup?')) {
+                fetch(`/api/backup/${name}`, { method: 'DELETE' })
+                    .then(response => response.json())
+                    .then(data => {
+                        alert(data.message);
+                        loadBackups();
+                    })
+                    .catch(error => console.error('Error:', error));
+            }
+        }
+
+        // Update status every 30 seconds
+        setInterval(updateStatus, 30000);
+
+        // Initial load
+        updateStatus();
+        loadBackups();
+    </script>
+</body>
+</html> 
